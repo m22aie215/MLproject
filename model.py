@@ -12,49 +12,8 @@ from sklearn.metrics import (
 )
 from torch.utils.tensorboard import SummaryWriter
 
-# Load USPS dataset
-transform = transforms.Compose(
-    [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
-)
 
-
-# Perform one-hot encoding for the targets
-def one_hot_encoding(target, num_classes=10):
-    return torch.eye(num_classes)[target]
-
-
-class OneHotUSPS(USPS):
-    def __getitem__(self, index):
-        img, target = super(OneHotUSPS, self).__getitem__(index)
-        return img, one_hot_encoding(target)
-
-
-train_dataset = OneHotUSPS(
-    root="./data", train=True, download=True, transform=transform
-)
-test_dataset = OneHotUSPS(
-    root="./data", train=False, download=True, transform=transform
-)
-
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
-
-
-# Define MLP architecture
-class MLP(nn.Module):
-    def __init__(self):
-        super(MLP, self).__init__()
-        self.fc1 = nn.Linear(16 * 16, 128)  # Adjust input size to match USPS image size
-        self.fc2 = nn.Linear(128, 10)
-
-    def forward(self, x):
-        x = x.view(-1, 16 * 16)  # Adjust view size to match USPS image size
-        x = torch.relu(self.fc1(x))
-        x = self.fc2(x)
-        return x
-
-
-# Define CNN architecture
+# Define the CNN architecture
 class CNN(nn.Module):
     def __init__(self):
         super(CNN, self).__init__()
@@ -74,78 +33,71 @@ class CNN(nn.Module):
         return x
 
 
-# Evaluation function
-def evaluate(model, test_loader, writer):
-    model.eval()
-    test_loss = 0
-    correct = 0
-    targets = []
-    predictions = []
-    with torch.no_grad():
-        for data, target in test_loader:
-            output = model(data)
-            test_loss += criterion(output, target).item()
-            pred = output.argmax(dim=1, keepdim=True)
-            correct += pred.eq(target.view_as(pred)).sum().item()
-            targets.extend(
-                target.max(dim=1)[1].tolist()
-            )  # Convert one-hot to class indices
-            predictions.extend(pred.flatten().tolist())
+# Load USPS dataset
+transform = transforms.Compose(
+    [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
+)
 
-    test_loss /= len(test_loader.dataset)
-    accuracy = 100.0 * correct / len(test_loader.dataset)
-    precision = precision_score(targets, predictions, average="weighted")
-    recall = recall_score(targets, predictions, average="weighted")
-    confusion = confusion_matrix(targets, predictions)
-
-    print(f"\nTest set: Average loss: {test_loss:.4f}, Accuracy: {accuracy:.2f}%")
-    print(f"Precision: {precision:.4f}, Recall: {recall:.4f}\n")
-    writer.add_scalar("Loss/test", test_loss, len(train_loader) * (epoch + 1))
-    writer.add_scalar("Accuracy/test", accuracy, len(train_loader) * (epoch + 1))
-    writer.add_scalar("Precision/test", precision, len(train_loader) * (epoch + 1))
-    writer.add_scalar("Recall/test", recall, len(train_loader) * (epoch + 1))
-    writer.flush()
-    return confusion
+train_dataset = USPS(root="./data", train=True, download=True, transform=transform)
+test_dataset = USPS(root="./data", train=False, download=True, transform=transform)
 
 
-# Training function
-def train(model, optimizer, criterion, train_loader, writer, epoch):
+# Define the training function
+def train(model, optimizer, criterion, train_loader, epoch):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         output = model(data)
-        # Convert one-hot encoded target to class indices
-        _, target_indices = target.max(dim=1)
-        loss = criterion(output, target_indices)
+        loss = criterion(output, target)
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
-        if batch_idx % 100 == 0:
-            print(
-                f"Train Epoch: {batch_idx*len(data)}/{len(train_loader.dataset)} "
-                f"({100. * batch_idx / len(train_loader):.0f}%)\tLoss: {loss.item()}"
-            )
-            writer.add_scalar(
-                "Loss/train", loss.item(), len(train_loader) * epoch + batch_idx
-            )
 
 
-# Set up TensorBoard
-writer = SummaryWriter()
+# Define the evaluation function
+def evaluate(model, test_loader):
+    model.eval()
+    correct = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            output = model(data)
+            pred = output.argmax(dim=1, keepdim=True)
+            correct += pred.eq(target.view_as(pred)).sum().item()
+    accuracy = 100.0 * correct / len(test_loader.dataset)
+    return accuracy
 
-# Initialize models, optimizer, and loss function
-mlp_model = MLP()
-cnn_model = CNN()
-optimizer_mlp = optim.Adam(mlp_model.parameters(), lr=0.001)
-optimizer_cnn = optim.Adam(cnn_model.parameters(), lr=0.001)
-criterion = nn.CrossEntropyLoss()
 
-# Training and evaluation loop
-for epoch in range(5):
-    train(mlp_model, optimizer_mlp, criterion, train_loader, writer, epoch)
-    train(cnn_model, optimizer_cnn, criterion, train_loader, writer, epoch)
+# Experiment configurations
+experiments = [
+    {"batch_size": 32, "optimizer": "SGD"},
+    {"batch_size": 64, "optimizer": "Adam"},
+    {"batch_size": 128, "optimizer": "RMSprop"},
+]
 
-    print("\nMLP Model Evaluation:")
-    mlp_confusion = evaluate(mlp_model, test_loader, writer)
-    print("\nCNN Model Evaluation:")
-    cnn_confusion = evaluate(cnn_model, test_loader, writer)
+# Run experiments
+for i, config in enumerate(experiments):
+    print(
+        f"Experiment {i + 1}: Batch Size = {config['batch_size']}, Optimizer = {config['optimizer']}"
+    )
+
+    train_loader = DataLoader(
+        train_dataset, batch_size=config["batch_size"], shuffle=True
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=config["batch_size"], shuffle=False
+    )
+
+    model = CNN()
+    criterion = nn.CrossEntropyLoss()
+
+    if config["optimizer"] == "SGD":
+        optimizer = optim.SGD(model.parameters(), lr=0.01)
+    elif config["optimizer"] == "Adam":
+        optimizer = optim.Adam(model.parameters(), lr=0.001)
+    elif config["optimizer"] == "RMSprop":
+        optimizer = optim.RMSprop(model.parameters(), lr=0.001)
+
+    for epoch in range(5):
+        train(model, optimizer, criterion, train_loader, epoch)
+
+    accuracy = evaluate(model, test_loader)
+    print(f"Accuracy: {accuracy:.2f}%\n")
